@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Environment variables — NEVER commit real keys
+.env
+!.env.example
+
+# Database file (SQLite)
+backend/lodestone.db
+
+# Piston test artifacts
+backend/test_all_langs.py
+
+# IDE / OS
+.vscode/
+.idea/
+*.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Rich-text conversion artifacts
+richtext_converted_to_markdown.md
