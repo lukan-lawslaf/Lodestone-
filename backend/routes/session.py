@@ -46,9 +46,15 @@ from schemas import (
     SessionStartRequest, SessionStartResponse,
     SpecStepRequest, SpecStepResponse,
     CodeRunRequest, CodeRunResponse,
+    CodeChatRequest, CodeChatResponse,
+    SubmitRequest, SubmitResponse,
 )
 from graph.state import make_initial_state, serialize_state, deserialize_state
-from graph.nodes import spec_gate, compiler_run, hint_generator
+from graph.nodes import (
+    spec_gate, compiler_run, hint_generator, code_classifier,
+    intent_diff, update_sks, reflection,
+)
+from models import Session as SessionModel, StudentSKS, CohortEvent
 
 
 # Create the router. All routes defined below will be mounted under /session
@@ -293,4 +299,192 @@ def code_run(
         stderr=state["compiler_stderr"],
         exit_code=state["compiler_exit_code"],
         ai_message=ai_message,
+    )
+
+
+# ── POST /session/{session_id}/code/chat ─────────────────────────────────
+
+@router.post("/{session_id}/code/chat", response_model=CodeChatResponse)
+def code_chat(
+    session_id: str,
+    body: CodeChatRequest,
+    db: DBSession = Depends(get_db),
+):
+    """
+    Handle a student's freeform question during the coding phase.
+
+    The message is first classified by code_classifier:
+      - "reference"  → factual/syntax question → return the direct answer
+      - "reasoning"  → debugging/logic question → route to hint_generator
+                        and return a Socratic guiding question instead
+
+    FLOW:
+    1. Load session state from DB.
+    2. Append the student's message to chat_history as a user turn.
+    3. Run code_classifier — get type + optional direct answer.
+    4a. If "reference": the answer is already in the classifier response.
+         Append it to chat_history as an assistant turn.
+    4b. If "reasoning": run hint_generator in chat mode (not debug mode).
+         The hint is appended to chat_history by hint_generator.
+    5. Strip the transient _classifier_* fields before persisting state.
+    6. Persist updated state to DB.
+    7. Return type + ai_message.
+
+    WHY APPEND THE STUDENT MESSAGE BEFORE RUNNING THE NODE?
+    code_classifier reads the last user turn from chat_history to know what
+    question to classify. By appending before calling the node, we keep the
+    node pure — it only reads state and doesn't need the raw request body.
+    """
+    # Step 1: Load session.
+    row = _get_session_or_404(session_id, db)
+    state = deserialize_state(row.state_json)
+
+    # Guard: the coding-phase chat only makes sense after the spec is approved.
+    if not state.get("spec_ready", False):
+        raise HTTPException(
+            status_code=400,
+            detail="Spec is not yet approved. Complete the spec phase first.",
+        )
+
+    # Step 2: Append the student's message to chat_history.
+    # code_classifier will read it as the last user turn.
+    chat_history = list(state.get("chat_history", []))
+    chat_history.append({"role": "user", "content": body.student_message})
+    state["chat_history"] = chat_history
+
+    # Step 3: Run code_classifier.
+    # This returns the updated chat_history + transient _classifier_* fields.
+    classifier_update = code_classifier(state)
+    state.update(classifier_update)
+
+    classification_type: str = state.pop("_classifier_type", "reasoning")
+    direct_answer: str | None = state.pop("_classifier_answer", None)
+
+    ai_message: str
+
+    if classification_type == "reference" and direct_answer:
+        # Step 4a: Reference question — use the direct answer from the classifier.
+        ai_message = direct_answer
+        # Append the assistant's direct answer to chat_history.
+        state["chat_history"].append({"role": "assistant", "content": ai_message})
+    else:
+        # Step 4b: Reasoning question — run hint_generator in chat (non-debug) mode.
+        # Set phase to something other than "compiler_run" so hint_generator
+        # uses spec/chat context mode instead of debug mode.
+        state["phase"] = "code_chat"
+        hint_update = hint_generator(state)
+        state.update(hint_update)
+        # hint_generator appends the hint as the last assistant turn.
+        if state["chat_history"]:
+            ai_message = state["chat_history"][-1]["content"]
+        else:
+            ai_message = "What have you tried so far?"
+
+    # Step 5: Strip transient fields (already popped above), then persist.
+    # Step 6: Persist updated state.
+    row.state_json = serialize_state(state)
+    row.phase = state["phase"]
+    row.updated_at = datetime.utcnow()
+    db.commit()
+
+    # Step 7: Return the response.
+    return CodeChatResponse(
+        type=classification_type,
+        ai_message=ai_message,
+    )
+
+
+# ── POST /session/{session_id}/submit ─────────────────────────────────────────
+
+@router.post("/{session_id}/submit", response_model=SubmitResponse)
+def submit(
+    session_id: str,
+    body: SubmitRequest,
+    db: DBSession = Depends(get_db),
+):
+    """
+    Run the final evaluation pipeline: intent_diff → update_sks → reflection.
+
+    FLOW:
+    1. Load session state from DB.
+    2. Write final_code onto state (student's last-edited version).
+    3. Run intent_diff  → does the code fulfill the spec?
+    4. Run update_sks   → update Student Knowledge State (pure Python, no LLM).
+    5. Run reflection   → generate one closing takeaway prompt.
+    6. Upsert StudentSKS row in DB (one row per student, accumulates across sessions).
+    7. Write a CohortEvent if there is a spec-code mismatch.
+    8. Persist updated session state to DB.
+    9. Return match + mismatch_note + reflection + updated sks.
+
+    WHY NOT RE-RUN THE COMPILER?
+    The student should have already run and passed their code before submitting.
+    The compiler output already in state (from the last /code/run call) is what
+    intent_diff uses as evidence of actual behavior. If the student submits
+    without ever running, compiler_stdout/stderr will be empty — intent_diff
+    will still work, but only on code structure vs. spec text.
+
+    COHORT EVENTS:
+    We write one "intent_mismatch" event per submit where match=False. This
+    feeds the CP9 dashboard without any extra query logic.
+    """
+    # Step 1: Load session.
+    row = _get_session_or_404(session_id, db)
+    state = deserialize_state(row.state_json)
+
+    # Step 2: Set the final code on state.
+    state["code"] = body.final_code
+
+    # Step 3: intent_diff — compare code vs. spec.
+    diff_update = intent_diff(state)
+    state.update(diff_update)
+
+    # Step 4: update_sks — pure Python EMA, no LLM call.
+    sks_update = update_sks(state)
+    state.update(sks_update)
+
+    # Step 5: reflection — one closing LLM call.
+    ref_update = reflection(state)
+    state.update(ref_update)
+
+    # Step 6: Upsert StudentSKS (one row per student across all sessions).
+    import json as _json
+    existing_sks_row = (
+        db.query(StudentSKS)
+        .filter(StudentSKS.student_id == row.student_id)
+        .first()
+    )
+    if existing_sks_row:
+        existing_sks_row.sks_json = _json.dumps(state["sks"])
+        existing_sks_row.updated_at = datetime.utcnow()
+    else:
+        db.add(StudentSKS(
+            student_id=row.student_id,
+            sks_json=_json.dumps(state["sks"]),
+            updated_at=datetime.utcnow(),
+        ))
+
+    # Step 7: Write CohortEvent if there's a mismatch.
+    diff_result = state.get("intent_diff_result") or {}
+    if not diff_result.get("match", True):
+        db.add(CohortEvent(
+            cohort_id=row.problem_id,   # use problem_id as cohort proxy for now
+            student_id=row.student_id,
+            session_id=session_id,
+            event_type="intent_mismatch",
+            detail=diff_result.get("mismatch_note", ""),
+            created_at=datetime.utcnow(),
+        ))
+
+    # Step 8: Persist session state.
+    row.state_json = serialize_state(state)
+    row.phase = state["phase"]
+    row.updated_at = datetime.utcnow()
+    db.commit()
+
+    # Step 9: Return response.
+    return SubmitResponse(
+        match=diff_result.get("match", True),
+        mismatch_note=diff_result.get("mismatch_note"),
+        reflection=state.get("reflection_note") or "What's one thing you would do differently next time?",
+        sks_update=state["sks"],
     )

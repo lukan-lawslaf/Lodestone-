@@ -73,7 +73,5 @@ def health_check():
 from routes.session import router as session_router
 app.include_router(session_router, prefix="/session", tags=["session"])
 
-# Future routers (added in later checkpoints):
-# from routes.dashboard import router as dashboard_router
-# app.include_router(dashboard_router, prefix="/dashboard", tags=["dashboard"])
-
+from routes.dashboard import router as dashboard_router
+app.include_router(dashboard_router, prefix="/dashboard", tags=["dashboard"])

@@ -185,11 +185,26 @@ Lodestone-/
 │   │   └── piston_client.py # Piston sandbox wrapper (async, 5 languages)
 │   │
 │   ├── prompts/
-│   │   ├── spec_prompts.py      # Spec review system prompt
-│   │   └── hint_prompts.py      # Hint generator system prompt (levels 1-5)
+│   │   ├── spec_prompts.py        # Spec gate system prompt
+│   │   ├── hint_prompts.py        # Hint generator system prompt (levels 1-5)
+│   │   ├── classifier_prompts.py  # Reference vs reasoning classifier prompt
+│   │   ├── diff_prompts.py        # Intent-diff comparison prompt
+│   │   └── reflection_prompts.py  # Reflection phase prompt
 │   │
-│   └── routes/
-│       └── session.py       # All /session/* endpoints
+│   ├── routes/
+│   │   ├── session.py       # All /session/* endpoints
+│   │   └── dashboard.py     # GET /dashboard/{cohort_id}
+│   │
+│   └── tests/               # Manual test scripts (one per checkpoint)
+│       ├── test_db.py
+│       ├── test_groq_client.py
+│       ├── test_spec_gate.py
+│       ├── test_piston_client.py
+│       ├── test_all_langs.py
+│       ├── test_code_run.py
+│       ├── test_code_chat.py
+│       ├── test_submit.py
+│       └── test_dashboard.py
 │
 ├── .env.example
 ├── .gitignore
@@ -214,7 +229,7 @@ All code runs inside isolated Piston containers — no network access, no filesy
 
 ## 🏗️ Build Checkpoints
 
-The backend is being built checkpoint by checkpoint, each testable independently:
+The backend was built checkpoint by checkpoint, each independently testable:
 
 - [x] **CP1** — DB boots, tables created cleanly
 - [x] **CP2** — Groq client works, JSON parsing with retry
@@ -222,9 +237,26 @@ The backend is being built checkpoint by checkpoint, each testable independently
 - [x] **CP4** — `/session/start` + `/session/{id}/spec` — full spec loop via HTTP
 - [x] **CP5** — Piston client, 5 languages, sandboxed execution
 - [x] **CP6** — `compiler_run` + `hint_generator` + `/code/run` endpoint
-- [ ] **CP7** — `code_classifier` + `/code/chat` endpoint
-- [ ] **CP8** — `intent_diff` + `update_sks` + `reflection` + `/submit`
-- [ ] **CP9** — `dashboard.py` — cohort analytics endpoint
+- [x] **CP7** — `code_classifier` + `/code/chat` endpoint
+- [x] **CP8** — `intent_diff` + `update_sks` + `reflection` + `/submit`
+- [x] **CP9** — `dashboard.py` — cohort analytics endpoint ✅
+
+### Running the Tests
+
+Each test file is standalone. Start the server first (`uvicorn main:app --port 8000`), then from the `backend/` directory:
+
+```bash
+# Run in checkpoint order — each depends on the previous layers working
+python -m tests.test_db
+python -m tests.test_groq_client
+python -m tests.test_spec_gate
+python -m tests.test_piston_client   # requires Docker + Piston running
+python -m tests.test_all_langs       # requires Docker + Piston running
+python -m tests.test_code_run        # requires Docker + Piston running
+python -m tests.test_code_chat       # requires server running
+python -m tests.test_submit          # requires server running
+python -m tests.test_dashboard       # requires server + prior test data
+```
 
 ---
 
