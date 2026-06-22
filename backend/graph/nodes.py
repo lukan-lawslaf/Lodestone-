@@ -103,6 +103,20 @@ def spec_gate(state: LodestoneState) -> dict:
     ready: bool = bool(response.get("ready", False))
     question: str | None = response.get("question", None)
 
+    # Count how many user messages are already in spec_history.
+    # Because the session starts empty, the student's first text submission is Reply 1.
+    # Reply 1 has 0 prior user turns in history.
+    # Reply 2 has 1 prior user turn.
+    # Reply 3 has 2 prior user turns.
+    # If the history already has 2 or more user turns, this is the student's 3rd reply.
+    # We enforce a hard cap and force spec approval.
+    num_user_turns = sum(1 for turn in spec_history if turn["role"] == "user")
+    if num_user_turns >= 2:
+        ready = True
+        question = None
+        response["ready"] = True
+        response["question"] = None
+
     # ── Update conversation history ────────────────────────────────────────────
     # We append both sides of this turn to spec_history:
     #   1. The user message (what we sent to Groq as the last user turn)

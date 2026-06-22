@@ -14,6 +14,17 @@ import json
 
 BASE = "http://127.0.0.1:8000"
 
+# ── Operational check: ensure Piston is running ────────────────────────
+import sys, socket
+try:
+    s = socket.create_connection(("127.0.0.1", 2000), timeout=2.0)
+    s.close()
+except Exception:
+    print("\033[91mERROR: Local Piston Docker container is not reachable on localhost:2000.\033[0m")
+    print("\033[91mPlease ensure Piston is running by starting it in Docker:\033[0m")
+    print("  docker run --privileged -dit -p 2000:2000 -v piston_data:/piston --name piston_api ghcr.io/engineer-man/piston")
+    sys.exit(1)
+
 # ── Setup: create a session and fast-track past spec_gate ─────────────────────
 print("=== Setting up session ===")
 start = requests.post(f"{BASE}/session/start", json={
@@ -24,7 +35,7 @@ start = requests.post(f"{BASE}/session/start", json={
 session_id = start["session_id"]
 print(f"session_id: {session_id}")
 print(f"phase:      {start['phase']}")
-print(f"ai_message: {start['ai_message'][:60]}...")
+print(f"ai_message: {start.get('ai_message')}")
 
 # Fast-track spec gate - send a complete spec to unlock the editor
 print("\n=== Fast-tracking spec gate ===")

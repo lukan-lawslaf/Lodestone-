@@ -80,22 +80,30 @@ def bootstrap_session(label: str) -> str:
 
 
 def run_code_on_session(sid: str, code: str):
-    """Best-effort code run — warns but doesn't abort if Piston is unavailable."""
-    try:
-        r = requests.post(
-            f"{BASE_URL}/session/{sid}/code/run",
-            json={"code": code, "language": "python"},
-            timeout=20,
-        )
-        if r.status_code == 200:
-            print(f"  Code run: exit_code={r.json()['exit_code']}")
-        else:
-            print(f"  Code run skipped (HTTP {r.status_code} — Piston may be down)")
-    except Exception as e:
-        print(f"  Code run skipped ({type(e).__name__} — Piston may be down)")
+    """Run code and fail if Piston has issues during runtime."""
+    r = requests.post(
+        f"{BASE_URL}/session/{sid}/code/run",
+        json={"code": code, "language": "python"},
+        timeout=20,
+    )
+    if r.status_code != 200:
+        print(red(f"ERROR: Code run failed with HTTP {r.status_code}: {r.text}"))
+        sys.exit(1)
+    print(f"  Code run: exit_code={r.json()['exit_code']}")
 
 
 def main():
+    # ── Operational check: ensure Piston is running ────────────────────────
+    import socket
+    try:
+        s = socket.create_connection(("localhost", 2000), timeout=2.0)
+        s.close()
+    except Exception:
+        print(red("ERROR: Local Piston Docker container is not reachable on localhost:2000."))
+        print(red("Please ensure Piston is running by starting it in Docker:"))
+        print("  docker run --privileged -dit -p 2000:2000 -v piston_data:/piston --name piston_api ghcr.io/engineer-man/piston")
+        sys.exit(1)
+
     # ── Test 1: Good code — should match ──────────────────────────────────
     sid1 = bootstrap_session("good")
     run_code_on_session(sid1, GOOD_CODE)

@@ -54,11 +54,11 @@ class SessionStartResponse(BaseModel):
 
     session_id:  UUID string the client must include in all subsequent calls.
     phase:       Always "spec_gate" at session start.
-    ai_message:  The first Socratic question from the spec_gate node.
+    ai_message:  The first Socratic question from the spec_gate node (optional).
     """
     session_id: str
     phase: str
-    ai_message: str
+    ai_message: Optional[str] = None
 
 
 # ── /session/{id}/spec ─────────────────────────────────────────────────────────

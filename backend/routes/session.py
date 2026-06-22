@@ -108,6 +108,13 @@ def start_session(body: SessionStartRequest, db: DBSession = Depends(get_db)):
     spec_gate prompt needs a problem statement to generate a useful opening
     question (not just "what's your spec?").
     """
+    # Delete any existing session for this student-problem pair to ensure we start fresh.
+    db.query(SessionModel).filter(
+        SessionModel.student_id == body.student_id,
+        SessionModel.problem_id == body.problem_id
+    ).delete()
+    db.commit()
+
     # Step 1: Generate a unique session identifier.
     # uuid4() generates a random UUID. str() converts it to the standard
     # "xxxxxxxx-xxxx-4xxx-..." hyphenated string format.
@@ -118,18 +125,6 @@ def start_session(body: SessionStartRequest, db: DBSession = Depends(get_db)):
         session_id=session_id,
         problem=body.problem_text,
     )
-
-    # Step 3: Run spec_gate to get the first question.
-    # spec_gate reads state["problem"] and state["student_spec"] (empty at this point).
-    # It returns a partial dict — we merge it into state immediately.
-    update = spec_gate(state)
-    state.update(update)
-
-    # Extract the AI's first question from the conversation history.
-    # spec_history[-1] is the assistant turn just added by spec_gate.
-    # We parse the JSON string back to get the "question" field.
-    last_assistant = json.loads(state["spec_history"][-1]["content"])
-    ai_message = last_assistant.get("question") or "What is your plan for solving this problem?"
 
     # Step 4: Persist the session to the database.
     # We create a new SessionModel row and add it to the DB session.
@@ -150,7 +145,7 @@ def start_session(body: SessionStartRequest, db: DBSession = Depends(get_db)):
     return SessionStartResponse(
         session_id=session_id,
         phase=state["phase"],
-        ai_message=ai_message,
+        ai_message=None,
     )
 
 

@@ -56,6 +56,17 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Enable CORS for frontend API calls
+from fastapi.middleware.cors import CORSMiddleware
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allow all origins for the hackathon showcase
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 
 # ── Health check endpoint ──────────────────────────────────────────────────────
 # A simple GET / that returns OK — useful to confirm the server is alive

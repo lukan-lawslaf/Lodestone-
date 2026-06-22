@@ -81,7 +81,7 @@ def bootstrap_ready_session():
     })
     session_id = data["session_id"]
     print(f"Session started: {session_id}")
-    print(f"AI first Q: {data['ai_message']}\n")
+    print(f"AI first Q: {data.get('ai_message')}\n")
 
     # Answer each spec question.  If spec_gate is still asking, reply with the
     # comprehensive spec + a direct answer to whatever was just asked so the
